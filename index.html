@@ -9,7 +9,6 @@
             --bg-color: #1a1a1a;
             --text-color: #e0e0e0;
             --primary-color: #007bff;
-            --secondary-color: #6c757d;
             --canvas-bg: #2a2a2a;
             --grid-color: #444;
             --axis-color: #888;
@@ -18,35 +17,37 @@
             --data-point-color: rgba(255, 255, 255, 0.7);
         }
 
+        /* Basic setup for a pleasant mobile-first experience */
+        html {
+            -webkit-text-size-adjust: 100%; /* Prevent font scaling in landscape */
+        }
+        
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             background-color: var(--bg-color);
             color: var(--text-color);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
             margin: 0;
-            padding: 20px;
+            padding: 15px; /* Reduced padding for mobile */
             box-sizing: border-box;
+            overscroll-behavior-y: contain; /* Prevents pull-to-refresh on canvas */
         }
 
         .container {
             display: flex;
-            flex-wrap: wrap;
-            gap: 30px;
+            flex-direction: column; /* Mobile-first: stack vertically */
+            gap: 20px;
             width: 100%;
             max-width: 1200px;
-            justify-content: center;
+            margin: 0 auto; /* Center the container */
         }
 
         .controls {
             background-color: var(--canvas-bg);
-            padding: 25px;
+            padding: 20px;
             border-radius: 8px;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
-            width: 300px;
-            flex-shrink: 0;
+            width: 100%; /* Full width on mobile */
+            box-sizing: border-box;
         }
 
         .controls h2 {
@@ -72,7 +73,7 @@
 
         button {
             width: 100%;
-            padding: 10px;
+            padding: 12px;
             background-color: var(--primary-color);
             color: white;
             border: none;
@@ -80,9 +81,10 @@
             cursor: pointer;
             font-size: 1em;
             transition: background-color 0.2s;
+            -webkit-tap-highlight-color: transparent; /* Remove tap highlight on mobile */
         }
 
-        button:hover {
+        button:hover, button:active {
             background-color: #0056b3;
         }
 
@@ -100,10 +102,9 @@
         .vector-j { color: var(--j-vector-color); }
 
         .plot-container {
-            flex-grow: 1;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            width: 100%;
+            max-width: 600px; /* Max size for the canvas */
+            align-self: center; /* Center canvas within the flex container */
         }
 
         canvas {
@@ -111,10 +112,38 @@
             border-radius: 8px;
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
             cursor: grab;
+            display: block; /* Removes bottom space */
+            width: 100%;
+            aspect-ratio: 1 / 1; /* Makes the canvas a responsive square */
+            touch-action: none; /* Disables browser gestures like pan/zoom on the canvas */
         }
         
-        canvas:active {
+        canvas.grabbing {
             cursor: grabbing;
+        }
+
+        /* Desktop layout: Side-by-side */
+        @media (min-width: 800px) {
+            body {
+                padding: 20px;
+                min-height: 100vh;
+                display: flex;
+                align-items: center; /* Vertically center content on large screens */
+            }
+
+            .container {
+                flex-direction: row; /* Switch to horizontal layout */
+                align-items: flex-start; /* Align items to the top */
+                gap: 30px;
+            }
+
+            .controls {
+                width: 300px;
+                flex-shrink: 0; /* Prevent controls from shrinking */
+            }
+            .plot-container {
+                flex-grow: 1; /* Allow plot to take remaining space */
+            }
         }
     </style>
 </head>
@@ -142,7 +171,7 @@
         </div>
 
         <div class="plot-container">
-            <canvas id="scatterPlot" width="600" height="600"></canvas>
+            <canvas id="scatterPlot"></canvas>
         </div>
     </div>
 
@@ -151,13 +180,12 @@
         // --- DOM Elements ---
         const canvas = document.getElementById('scatterPlot');
         const ctx = canvas.getContext('2d');
-
+        // ... (rest of the elements are the same)
         const numPointsSlider = document.getElementById('numPoints');
         const numPointsValue = document.getElementById('numPointsValue');
         const stdDevSlider = document.getElementById('stdDev');
         const stdDevValue = document.getElementById('stdDevValue');
         const regenerateBtn = document.getElementById('regenerateBtn');
-
         const iVecXSpan = document.getElementById('i-vec-x');
         const iVecYSpan = document.getElementById('i-vec-y');
         const jVecXSpan = document.getElementById('j-vec-x');
@@ -168,17 +196,15 @@
         let transformedData = [];
         let numPoints = parseInt(numPointsSlider.value);
         let stdDev = parseFloat(stdDevSlider.value);
-        
         let basisI = { x: 1, y: 0 };
         let basisJ = { x: 0, y: 1 };
-
-        let draggingVector = null; // 'i', 'j', or null
+        let draggingVector = null;
+        let canvasCenter = { x: 0, y: 0 }; // Will be set dynamically
 
         // --- Constants ---
-        const PLOT_SCALE = 50; // pixels per unit
+        let PLOT_SCALE = 50;
         const POINT_RADIUS = 2;
-        const HANDLE_RADIUS = 10;
-        
+        const HANDLE_RADIUS = 12; // Slightly larger for easier touch interaction
         const COLORS = {
             GRID: 'rgba(136, 136, 136, 0.2)',
             AXIS: 'rgba(136, 136, 136, 0.5)',
@@ -187,160 +213,97 @@
             DATA: 'rgba(255, 255, 255, 0.7)'
         };
 
-        const canvasCenter = { x: canvas.width / 2, y: canvas.height / 2 };
-
-        // --- Core Logic ---
-
-        /**
-         * Generates two normally distributed random numbers using the Box-Muller transform.
-         * @returns {Array<number>} An array containing two random numbers.
-         */
+        // --- Core Logic (Unchanged) ---
         function boxMullerTransform() {
             let u1 = 0, u2 = 0;
-            //Convert [0,1) to (0,1)
             while (u1 === 0) u1 = Math.random();
             while (u2 === 0) u2 = Math.random();
             const R = Math.sqrt(-2.0 * Math.log(u1));
             const theta = 2.0 * Math.PI * u2;
             return [R * Math.cos(theta), R * Math.sin(theta)];
         }
-        
-        /**
-         * Generates an array of 2D normally distributed data points.
-         */
         function generateData() {
             originalData = [];
             for (let i = 0; i < numPoints / 2; i++) {
                 const [z1, z2] = boxMullerTransform();
                 originalData.push({ x: z1 * stdDev, y: z2 * stdDev });
-                originalData.push({ x: z2 * stdDev, y: z1 * stdDev }); // Use both for symmetry
+                originalData.push({ x: z2 * stdDev, y: z1 * stdDev });
             }
-            originalData.length = numPoints; // Ensure exact number of points
+            originalData.length = numPoints;
         }
-        
-        /**
-         * Applies the current linear transformation (defined by basisI, basisJ) to the original data.
-         */
         function transformData() {
-            transformedData = originalData.map(p => {
-                return {
-                    x: p.x * basisI.x + p.y * basisJ.x,
-                    y: p.x * basisI.y + p.y * basisJ.y
-                };
-            });
+            transformedData = originalData.map(p => ({
+                x: p.x * basisI.x + p.y * basisJ.x,
+                y: p.x * basisI.y + p.y * basisJ.y
+            }));
         }
-        
-        // --- Drawing ---
-        
-        /**
-         * Converts world coordinates (data space) to canvas coordinates (pixel space).
-         */
+
+        // --- Drawing & Coordinate Systems ---
+        function resizeCanvas() {
+            const size = canvas.clientWidth;
+            // Set the drawing buffer size to match the display size to avoid blurriness
+            canvas.width = size;
+            canvas.height = size;
+            
+            // Recalculate center and scale
+            canvasCenter = { x: canvas.width / 2, y: canvas.height / 2 };
+            PLOT_SCALE = size / 12; // Adjust scale based on canvas size (12 units across)
+
+            draw(); // Redraw everything after resizing
+        }
+
         function worldToCanvas(x, y) {
             return {
                 cx: canvasCenter.x + x * PLOT_SCALE,
-                cy: canvasCenter.y - y * PLOT_SCALE // Y is inverted in canvas
+                cy: canvasCenter.y - y * PLOT_SCALE
             };
         }
-
-        /**
-         * Converts canvas coordinates (pixel space) to world coordinates (data space).
-         */
         function canvasToWorld(cx, cy) {
             return {
                 x: (cx - canvasCenter.x) / PLOT_SCALE,
                 y: -(cy - canvasCenter.y) / PLOT_SCALE
             };
         }
-
+        // ... (drawGrid, drawAxes, drawDataPoints, drawVector are identical to before)
         function drawGrid() {
             ctx.strokeStyle = COLORS.GRID;
             ctx.lineWidth = 1;
-            
             const step = PLOT_SCALE;
-            // Vertical lines
             for (let x = canvasCenter.x % step; x < canvas.width; x += step) {
-                ctx.beginPath();
-                ctx.moveTo(x, 0);
-                ctx.lineTo(x, canvas.height);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
             }
-            // Horizontal lines
             for (let y = canvasCenter.y % step; y < canvas.height; y += step) {
-                ctx.beginPath();
-                ctx.moveTo(0, y);
-                ctx.lineTo(canvas.width, y);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
             }
         }
-
         function drawAxes() {
             ctx.strokeStyle = COLORS.AXIS;
             ctx.lineWidth = 2;
-            // X-Axis
-            ctx.beginPath();
-            ctx.moveTo(0, canvasCenter.y);
-            ctx.lineTo(canvas.width, canvasCenter.y);
-            ctx.stroke();
-            // Y-Axis
-            ctx.beginPath();
-            ctx.moveTo(canvasCenter.x, 0);
-            ctx.lineTo(canvasCenter.x, canvas.height);
-            ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, canvasCenter.y); ctx.lineTo(canvas.width, canvasCenter.y); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(canvasCenter.x, 0); ctx.lineTo(canvasCenter.x, canvas.height); ctx.stroke();
         }
-
         function drawDataPoints() {
             ctx.fillStyle = COLORS.DATA;
             transformedData.forEach(p => {
                 const { cx, cy } = worldToCanvas(p.x, p.y);
-                ctx.beginPath();
-                ctx.arc(cx, cy, POINT_RADIUS, 0, 2 * Math.PI);
-                ctx.fill();
+                ctx.beginPath(); ctx.arc(cx, cy, POINT_RADIUS, 0, 2 * Math.PI); ctx.fill();
             });
         }
-
         function drawVector(vector, color) {
             const { cx, cy } = worldToCanvas(vector.x, vector.y);
-            
-            // Draw vector line
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.moveTo(canvasCenter.x, canvasCenter.y);
-            ctx.lineTo(cx, cy);
-            ctx.stroke();
-
-            // Draw arrowhead
+            ctx.strokeStyle = color; ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.moveTo(canvasCenter.x, canvasCenter.y); ctx.lineTo(cx, cy); ctx.stroke();
             const angle = Math.atan2(cy - canvasCenter.y, cx - canvasCenter.x);
-            ctx.fillStyle = color;
-            ctx.save();
-            ctx.translate(cx, cy);
-            ctx.rotate(angle);
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(-12, 6);
-            ctx.lineTo(-12, -6);
-            ctx.closePath();
-            ctx.fill();
-            ctx.restore();
-
-            // Draw draggable handle
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(cx, cy, HANDLE_RADIUS, 0, 2 * Math.PI);
-            ctx.fill();
-            
-            // Add a white ring for better visibility
-            ctx.strokeStyle = 'white';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(cx, cy, HANDLE_RADIUS, 0, 2 * Math.PI);
-            ctx.stroke();
+            ctx.fillStyle = color; ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
+            ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-12, 6); ctx.lineTo(-12, -6); ctx.closePath();
+            ctx.fill(); ctx.restore();
+            ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx, cy, HANDLE_RADIUS, 0, 2 * Math.PI); ctx.fill();
+            ctx.strokeStyle = 'white'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(cx, cy, HANDLE_RADIUS, 0, 2 * Math.PI); ctx.stroke();
         }
 
         function draw() {
-            // Clear canvas
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
             drawGrid();
             drawAxes();
             drawDataPoints();
@@ -349,14 +312,12 @@
         }
 
         // --- UI Updates ---
-
         function updateVectorInfo() {
             iVecXSpan.textContent = basisI.x.toFixed(2);
             iVecYSpan.textContent = basisI.y.toFixed(2);
             jVecXSpan.textContent = basisJ.x.toFixed(2);
             jVecYSpan.textContent = basisJ.y.toFixed(2);
         }
-        
         function fullUpdate() {
             generateData();
             transformData();
@@ -364,52 +325,45 @@
             updateVectorInfo();
         }
         
-        // --- Event Listeners ---
-
-        numPointsSlider.addEventListener('input', (e) => {
-            numPoints = parseInt(e.target.value);
-            numPointsValue.textContent = numPoints;
-            fullUpdate();
-        });
-
-        stdDevSlider.addEventListener('input', (e) => {
-            stdDev = parseFloat(e.target.value);
-            stdDevValue.textContent = stdDev.toFixed(1);
-            fullUpdate();
-        });
-
-        regenerateBtn.addEventListener('click', fullUpdate);
-
-        canvas.addEventListener('mousedown', (e) => {
+        // --- UNIFIED Event Handlers for Mouse and Touch ---
+        function getEventCoords(e) {
             const rect = canvas.getBoundingClientRect();
-            const mousePos = { 
-                x: e.clientX - rect.left, 
-                y: e.clientY - rect.top 
-            };
-            
+            // Check if it's a touch event
+            if (e.touches && e.touches.length > 0) {
+                return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+            }
+            // Else, it's a mouse event
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        }
+
+        function handleDragStart(e) {
+            const coords = getEventCoords(e);
             const iTip = worldToCanvas(basisI.x, basisI.y);
             const jTip = worldToCanvas(basisJ.x, basisJ.y);
+            const distToI = Math.hypot(coords.x - iTip.cx, coords.y - iTip.cy);
+            const distToJ = Math.hypot(coords.x - jTip.cx, coords.y - jTip.cy);
 
-            const distToI = Math.hypot(mousePos.x - iTip.cx, mousePos.y - iTip.cy);
-            const distToJ = Math.hypot(mousePos.x - jTip.cx, mousePos.y - jTip.cy);
+            // Give a larger hit area for touch
+            const effectiveHandleRadius = HANDLE_RADIUS * 1.5;
 
-            if (distToI <= HANDLE_RADIUS) {
+            if (distToI <= effectiveHandleRadius) {
                 draggingVector = 'i';
-            } else if (distToJ <= HANDLE_RADIUS) {
+            } else if (distToJ <= effectiveHandleRadius) {
                 draggingVector = 'j';
             }
-            if (draggingVector) canvas.style.cursor = 'grabbing';
-        });
+            if (draggingVector) {
+                canvas.classList.add('grabbing');
+            }
+        }
 
-        canvas.addEventListener('mousemove', (e) => {
+        function handleDragMove(e) {
             if (!draggingVector) return;
+            
+            // Prevent scrolling on mobile while dragging on canvas
+            e.preventDefault();
 
-            const rect = canvas.getBoundingClientRect();
-            const mousePos = { 
-                x: e.clientX - rect.left, 
-                y: e.clientY - rect.top 
-            };
-            const worldPos = canvasToWorld(mousePos.x, mousePos.y);
+            const coords = getEventCoords(e);
+            const worldPos = canvasToWorld(coords.x, coords.y);
 
             if (draggingVector === 'i') {
                 basisI = worldPos;
@@ -420,18 +374,45 @@
             transformData();
             draw();
             updateVectorInfo();
-        });
+        }
 
-        const stopDragging = () => {
+        function handleDragEnd() {
             draggingVector = null;
-            canvas.style.cursor = 'grab';
-        };
+            canvas.classList.remove('grabbing');
+        }
 
-        canvas.addEventListener('mouseup', stopDragging);
-        canvas.addEventListener('mouseleave', stopDragging);
+        // --- Attach Event Listeners ---
+        numPointsSlider.addEventListener('input', (e) => {
+            numPoints = parseInt(e.target.value);
+            numPointsValue.textContent = numPoints;
+        });
+        numPointsSlider.addEventListener('change', fullUpdate); // Update fully on release
+
+        stdDevSlider.addEventListener('input', (e) => {
+            stdDev = parseFloat(e.target.value);
+            stdDevValue.textContent = stdDev.toFixed(1);
+        });
+        stdDevSlider.addEventListener('change', fullUpdate); // Update fully on release
+
+        regenerateBtn.addEventListener('click', fullUpdate);
+        
+        // Mouse events
+        canvas.addEventListener('mousedown', handleDragStart);
+        window.addEventListener('mousemove', handleDragMove);
+        window.addEventListener('mouseup', handleDragEnd);
+
+        // Touch events
+        canvas.addEventListener('touchstart', handleDragStart, { passive: false });
+        window.addEventListener('touchmove', handleDragMove, { passive: false });
+        window.addEventListener('touchend', handleDragEnd);
+        window.addEventListener('touchcancel', handleDragEnd);
+
+        // Resize event
+        window.addEventListener('resize', resizeCanvas);
         
         // --- Initialisation ---
-        fullUpdate();
+        resizeCanvas(); // Set initial canvas size
+        fullUpdate();   // Generate initial data and draw
     });
     </script>
 </body>
